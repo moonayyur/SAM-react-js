@@ -12,7 +12,6 @@ export default function SegmentationComponent() {
     useState<ort.InferenceSession.OnnxValueMapType>();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imageRef = useRef<HTMLImageElement>(null);
 
   const [imageEmbeddings, setImageEmbeddings] = useState<ort.Tensor | null>(
     null,
@@ -22,30 +21,53 @@ export default function SegmentationComponent() {
   const canvas = canvasRef.current;
   const context = canvas?.getContext("2d");
 
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) {
+      const imgURL = URL.createObjectURL(file);
+      loadImage(imgURL);
+    }
+  }
+
+  function loadImage(imgURL: string) {
+    const img = new Image();
+    img.onload = () => imageEncoder(imgURL);
+    img.src = imgURL;
+  }
+
   const displayCanvas = useCallback(
     (x?: number, y?: number) => {
-      if (canvas && imageDataImage) {
-        const context = canvas.getContext("2d");
-        canvas.width = imageDataImage.width;
-        canvas.height = imageDataImage.height;
-        context!.putImageData(imageDataImage, 0, 0);
-        if (x && y) {
-          context!.fillStyle = "green";
-          context!.fillRect(x, y, 10, 10);
-        }
+      if (!canvas || !imageDataImage || !context) {
+        return;
+      }
+      context.clearRect(0, 0, canvas.width, canvas.height);
+
+      canvas.width = imageDataImage.width;
+      canvas.height = imageDataImage.height;
+      context.putImageData(imageDataImage, 0, 0);
+      if (x && y) {
+        context.fillStyle = "green";
+        context.fillRect(x, y, 10, 10);
       }
     },
-    [canvas, imageDataImage],
+    [canvas, context, imageDataImage],
   );
 
   useEffect(() => {
     displayCanvas();
   }, [displayCanvas, imageDataImage]);
 
+  useEffect(() => {
+    console.log("Image Data Image", imageDataImage);
+  }, [imageDataImage]);
+
   const maskDecoder = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (event: any) => {
-      const rect = canvas!.getBoundingClientRect();
+    async (event: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!canvas || !context || !imageEmbeddings) {
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
 
@@ -53,6 +75,8 @@ export default function SegmentationComponent() {
       setStatus(
         `Point (${x}, ${y}). Downloading the decoder model if needed and generating mask...`,
       );
+
+      console.log("Canvas dimensions:", canvas!.width, canvas!.height);
 
       displayCanvas(x, y);
 
@@ -95,6 +119,7 @@ export default function SegmentationComponent() {
       const maskImageData = results.masks.toImageData();
       context!.globalAlpha = 0.5;
       const imageBitmap = await createImageBitmap(maskImageData);
+      console.log("imageBitmap", imageBitmap.width, imageBitmap.height);
       context!.drawImage(imageBitmap, 0, 0);
       setDecoderResults(results);
 
@@ -106,7 +131,10 @@ export default function SegmentationComponent() {
     [canvas, context, displayCanvas, imageEmbeddings],
   );
 
-  const imageEncoder = useCallback(async (img: HTMLImageElement) => {
+  const imageEncoder = useCallback(async (imgURL: string) => {
+    const img = new Image();
+    img.src = imgURL;
+
     setStatus(
       `Image size ${img.width}x${img.height}. Downloading the encoder model if not cached and generating embedding...`,
     );
@@ -118,6 +146,7 @@ export default function SegmentationComponent() {
     const resizedImage = resizedTensor.toImageData();
     let imageDataTensor = await ort.Tensor.fromImage(resizedImage);
     setImageDataImage(imageDataTensor.toImageData());
+    console.log("Image Data Tensor", imageDataTensor);
 
     let tf_tensor = tf.tensor(
       imageDataTensor.data,
@@ -154,27 +183,6 @@ export default function SegmentationComponent() {
     );
   }, []);
 
-  function loadImage(fileReader: FileReader) {
-    const img = imageRef.current;
-
-    if (img) {
-      img.onload = () => imageEncoder(img);
-      img.src = fileReader.result as string;
-    }
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function handleFileChange(event: any) {
-    const target = event.target;
-    const files = target?.files;
-
-    if (FileReader && files && files.length) {
-      const fileReader = new FileReader();
-      fileReader.onload = () => loadImage(fileReader);
-      fileReader.readAsDataURL(files[0]);
-    }
-  }
-
   function displayResults() {
     if (decoderResults) {
       console.log(decoderResults.iou_predictions);
@@ -207,7 +215,6 @@ export default function SegmentationComponent() {
       <div className="p-5 text-5xl">Segment Anything with tfjs and ort</div>
       <div className="p-3">
         <input type="file" onChange={handleFileChange} />
-        <img className="hidden" ref={imageRef} />
       </div>
       <div className="p-3">
         <div className="text-2xl">Status :</div>
