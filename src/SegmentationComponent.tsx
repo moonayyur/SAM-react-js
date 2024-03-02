@@ -57,10 +57,6 @@ export default function SegmentationComponent() {
     displayCanvas();
   }, [displayCanvas, imageDataImage]);
 
-  useEffect(() => {
-    console.log("Image Data Image", imageDataImage);
-  }, [imageDataImage]);
-
   const maskDecoder = useCallback(
     async (event: React.MouseEvent<HTMLCanvasElement>) => {
       if (!canvas || !context || !imageEmbeddings) {
@@ -139,30 +135,66 @@ export default function SegmentationComponent() {
       `Image size ${img.width}x${img.height}. Downloading the encoder model if not cached and generating embedding...`,
     );
 
+    const t0 = Date.now();
+
+    const originalHeight = img.height;
+    const originalWidth = img.width;
+    let resizedHeight, resizedWidth;
+    if (originalHeight > originalWidth) {
+      resizedHeight = 1024;
+      resizedWidth = Math.round((originalWidth / originalHeight) * 1024);
+    } else {
+      resizedWidth = 1024;
+      resizedHeight = Math.round((originalHeight / originalWidth) * 1024);
+    }
+
+    //resize the tensor to 1x4xHxW
     const resizedTensor = await ort.Tensor.fromImage(img, {
-      resizedWidth: 1024,
-      resizedHeight: 1024,
+      resizedHeight: resizedHeight,
+      resizedWidth: resizedWidth,
     });
+
+    //since ort tensor doesn't support tensor value manipulation, we do this drop the alpha channel and get 1x3xHxW shape
     const resizedImage = resizedTensor.toImageData();
     let imageDataTensor = await ort.Tensor.fromImage(resizedImage);
+
+    //to print the image on the canvas
     setImageDataImage(imageDataTensor.toImageData());
-    console.log("Image Data Tensor", imageDataTensor);
+
+    //convert to tf tensor for manipulation
+    //reshape to 3xHxW then transpose to HxWx3
+    //convert back to ort tensor
+    //add padding to convert the dimension HxWx3 to be 1024x1024x3
 
     let tf_tensor = tf.tensor(
       imageDataTensor.data,
       imageDataTensor.dims as number[],
     );
-    tf_tensor = tf_tensor.reshape([3, 1024, 1024]);
+    tf_tensor = tf_tensor.reshape([3, resizedHeight, resizedWidth]);
     tf_tensor = tf_tensor.transpose([1, 2, 0]).mul(255);
+    tf_tensor = tf_tensor.pad([
+      [0, 1024 - resizedHeight],
+      [0, 1024 - resizedWidth],
+      [0, 0],
+    ]);
 
     imageDataTensor = new ort.Tensor(
       tf_tensor.dataSync(),
       tf_tensor.shape,
     ) as ort.TypedTensor<"float32">;
 
-    const session = await ort.InferenceSession.create(encoderModelPath);
+    console.log("Resized image tensor", imageDataTensor.dims);
 
+    const t1 = Date.now();
+
+    console.log(`Image preprocessing took : ${(t1 - t0) / 1000} seconds`);
+
+    //create the encoder session
+    const t2 = Date.now();
+    const session = await ort.InferenceSession.create(encoderModelPath);
+    const t3 = Date.now();
     console.log("Encoder Session", session);
+    console.log(`Creating encoder session took : ${(t3 - t2) / 1000} seconds`);
 
     const feeds = { input_image: imageDataTensor };
 
@@ -176,10 +208,11 @@ export default function SegmentationComponent() {
 
     const end = Date.now();
 
-    const timeTaken = (end - start) / 1000;
-    console.log(`Generating image embedding took : ${timeTaken} seconds`);
+    console.log(
+      `Generating image embedding took : ${(end - start) / 1000} seconds`,
+    );
     setStatus(
-      `Embedding generated in : ${timeTaken} seconds. Click on the image to generate a mask`,
+      `Embedding generated in : ${(end - start) / 1000} seconds. Click on the image to generate a mask`,
     );
   }, []);
 
